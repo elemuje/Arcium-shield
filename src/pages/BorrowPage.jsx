@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { TrendingDown, Shield, AlertTriangle, Loader2, CheckCircle, ArrowRight, Lock } from 'lucide-react'
+import { TrendingDown, Shield, AlertTriangle, Loader2, CheckCircle, ArrowRight, Lock, Info } from 'lucide-react'
 import { useWallet } from '@/contexts/SolanaWalletContext'
 import { useLendingProtocol } from '@/hooks/useLendingProtocol'
 import { PoolCard } from '@/components/protocol/PoolCard'
@@ -8,54 +8,76 @@ import { HealthFactorGauge } from '@/components/charts/HealthFactorGauge'
 
 export default function BorrowPage() {
   const { connected } = useWallet()
-  const { pools, userPositions, borrow, loading, isPrivateMode, setIsPrivateMode } = useLendingProtocol()
-  const [borrowPool, setBorrowPool] = useState(null)
-  const [collateralPool, setCollateralPool] = useState(null)
-  const [amount, setAmount] = useState('')
-  const [showData, setShowData] = useState(false)
-  const [showSuccess, setShowSuccess] = useState(false)
-  const [txHash, setTxHash] = useState('')
-  const [mpcStatus, setMpcStatus] = useState('idle')
+  const { pools, depositPositions, borrow, loading, isPrivateMode, setIsPrivateMode } = useLendingProtocol()
 
-  const borrowAsset = pools.find((p) => p.id === borrowPool)
-  const collateralAsset = pools.find((p) => p.id === collateralPool)
-  const collateralPosition = userPositions.find((p) => p.poolId === collateralPool)
+  const [borrowPool,     setBorrowPool]     = useState(null)
+  const [collateralPool, setCollateralPool] = useState(null)
+  const [amount,         setAmount]         = useState('')
+  const [showData,       setShowData]       = useState(true)   // default visible so UX is clear
+  const [showSuccess,    setShowSuccess]    = useState(false)
+  const [txHash,         setTxHash]         = useState('')
+  const [mpcStatus,      setMpcStatus]      = useState('idle')
+
+  const borrowAsset      = pools.find((p) => p.id === borrowPool)
+  const collateralAsset  = pools.find((p) => p.id === collateralPool)
+  // Find the deposit position for the chosen collateral pool
+  const collateralPosition = depositPositions.find((p) => p.poolId === collateralPool)
+
+  // Max amount user can safely borrow given their collateral
+  const maxBorrow = useMemo(() => {
+    if (!collateralPosition || !collateralAsset || !borrowAsset) return 0
+    const collateralValueUSD = collateralPosition.depositedAmount * collateralAsset.priceUSD
+    const maxBorrowUSD       = collateralValueUSD * (borrowAsset.ltv / 100)
+    return maxBorrowUSD / borrowAsset.priceUSD
+  }, [collateralPosition, collateralAsset, borrowAsset])
 
   const borrowPreview = useMemo(() => {
     if (!borrowAsset || !collateralAsset || !amount || !collateralPosition) return null
-    const borrowAmount = parseFloat(amount) || 0
+    const borrowAmount    = parseFloat(amount) || 0
+    if (borrowAmount <= 0) return null
     const collateralValue = collateralPosition.depositedAmount * collateralAsset.priceUSD
-    const borrowValue = borrowAmount * borrowAsset.priceUSD
-    const ltv = (borrowValue / collateralValue) * 100
-    const healthFactor = collateralValue * (borrowAsset.liquidationThreshold / 100) / borrowValue
-    return { borrowAmount, collateralValue, borrowValue, ltv, maxLTV: borrowAsset.ltv,
-      healthFactor, liquidationPrice: 0, isSafe: ltv <= borrowAsset.ltv && healthFactor >= 1.1 }
+    const borrowValue     = borrowAmount * borrowAsset.priceUSD
+    if (collateralValue <= 0) return null
+    const ltv             = (borrowValue / collateralValue) * 100
+    const healthFactor    = (collateralValue * (borrowAsset.liquidationThreshold / 100)) / borrowValue
+    return {
+      borrowAmount, collateralValue, borrowValue, ltv,
+      maxLTV: borrowAsset.ltv, healthFactor, liquidationPrice: 0,
+      isSafe: ltv <= borrowAsset.ltv && healthFactor >= 1.1,
+    }
   }, [borrowAsset, collateralAsset, amount, collateralPosition])
 
   const handleBorrow = async () => {
     if (!borrowPool || !collateralPool || !amount) return
     try {
       setMpcStatus(isPrivateMode ? 'computing' : 'idle')
-      if (isPrivateMode) await new Promise((r) => setTimeout(r, 2000))
-      setMpcStatus('done')
       const result = await borrow(borrowPool, collateralPool, parseFloat(amount), isPrivateMode)
+      setMpcStatus('idle')
       if (result.success) {
         setTxHash(result.txHash || '')
         setShowSuccess(true)
         setAmount('')
+        setBorrowPool(null)
+        setCollateralPool(null)
       }
-    } catch (err) { console.error('Borrow failed:', err) }
-    finally { setMpcStatus('idle') }
+    } catch (err) {
+      console.error('Borrow failed:', err)
+      setMpcStatus('idle')
+    }
   }
 
-  const depositedPools = userPositions.filter((p) => p.depositedAmount > 0).map((p) => p.poolId)
+  // Pools the user has actually deposited into
+  const collateralPools = pools.filter((p) => depositPositions.some((dp) => dp.poolId === p.id))
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="font-data text-2xl font-bold text-[#EAECEF]">Borrow</h1>
-          <p className="text-sm text-[#848E9C] font-body mt-1">Borrow against your collateral with encrypted health factor computation</p>
+          <p className="text-sm text-[#848E9C] font-body mt-1">
+            Borrow against your deposited assets
+          </p>
         </div>
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#F6465D]/10 border border-[#F6465D]/20">
           <AlertTriangle className="w-3.5 h-3.5 text-[#F6465D]" />
@@ -65,82 +87,162 @@ export default function BorrowPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
-          {/* Step 1 */}
+
+          {/* Step 1 — Select Collateral */}
           <div className="glass-panel rounded-xl p-5">
-            <div className="flex items-center gap-2 mb-4">
+            <div className="flex items-center gap-2 mb-1">
               <span className="w-6 h-6 rounded-full bg-[#F7A600] flex items-center justify-center text-xs font-bold text-[#0B0E11]">1</span>
               <h2 className="font-data font-semibold text-[#EAECEF]">Select Collateral</h2>
             </div>
-            {depositedPools.length === 0 ? (
-              <div className="text-center py-8">
-                <Lock className="w-8 h-8 text-[#1E232C] mx-auto mb-3" />
-                <p className="text-sm text-[#848E9C] font-body">No deposited assets available as collateral</p>
-                <p className="text-xs text-[#848E9C] font-body mt-1">Lend assets first to use as collateral</p>
+            <p className="text-xs text-[#848E9C] font-body mb-4 ml-8">Choose an asset you have already deposited</p>
+
+            {collateralPools.length === 0 ? (
+              <div className="text-center py-10 space-y-3">
+                <Lock className="w-10 h-10 text-[#1E232C] mx-auto" />
+                <p className="text-sm font-semibold text-[#EAECEF] font-data">No collateral available</p>
+                <p className="text-xs text-[#848E9C] font-body">Go to the <strong>Lend</strong> tab and deposit assets first — they'll appear here as collateral.</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {pools.filter((p) => depositedPools.includes(p.id)).map((p) => (
-                  <PoolCard key={p.id} pool={p} onSelect={setCollateralPool} isSelected={collateralPool === p.id} />
-                ))}
+                {collateralPools.map((p) => {
+                  const dep = depositPositions.find((d) => d.poolId === p.id)
+                  return (
+                    <div key={p.id} className="relative">
+                      <PoolCard pool={p} onSelect={setCollateralPool} isSelected={collateralPool === p.id} />
+                      {/* deposited balance badge */}
+                      {dep && (
+                        <div className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-[#0ECB81]/10 border border-[#0ECB81]/20">
+                          <span className="text-[10px] font-data font-semibold text-[#0ECB81]">
+                            {dep.depositedAmount.toLocaleString(undefined, { maximumFractionDigits: 4 })} {p.symbol}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>
 
-          {/* Step 2 */}
+          {/* Step 2 — Select Borrow Asset */}
           <div className="glass-panel rounded-xl p-5">
-            <div className="flex items-center gap-2 mb-4">
+            <div className="flex items-center gap-2 mb-1">
               <span className="w-6 h-6 rounded-full bg-[#7C3AED] flex items-center justify-center text-xs font-bold text-white">2</span>
-              <h2 className="font-data font-semibold text-[#EAECEF]">Select Borrow Asset</h2>
+              <h2 className="font-data font-semibold text-[#EAECEF]">Select Asset to Borrow</h2>
             </div>
+            <p className="text-xs text-[#848E9C] font-body mb-4 ml-8">
+              {collateralPool
+                ? `Using ${collateralAsset?.symbol} as collateral`
+                : 'Select a collateral asset first'}
+            </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {pools.filter((p) => p.id !== collateralPool).map((p) => (
-                <PoolCard key={p.id} pool={p} onSelect={setBorrowPool} isSelected={borrowPool === p.id} />
-              ))}
+              {pools
+                .filter((p) => p.id !== collateralPool)   // can't borrow same asset as collateral
+                .map((p) => (
+                  <PoolCard key={p.id} pool={p} onSelect={setBorrowPool} isSelected={borrowPool === p.id} />
+                ))}
             </div>
           </div>
 
-          {/* Step 3 */}
-          {borrowAsset && collateralAsset && (
+          {/* Step 3 — Enter Amount */}
+          {borrowAsset && collateralAsset && collateralPosition && (
             <div className="glass-panel rounded-xl p-5">
               <div className="flex items-center gap-2 mb-4">
                 <span className="w-6 h-6 rounded-full bg-[#0ECB81] flex items-center justify-center text-xs font-bold text-[#0B0E11]">3</span>
                 <h2 className="font-data font-semibold text-[#EAECEF]">Enter Borrow Amount</h2>
               </div>
+
+              {/* Collateral summary */}
+              <div className="p-3 rounded-lg bg-[#12161C] border border-[#1E232C] mb-4 flex items-center justify-between">
+                <span className="text-xs text-[#848E9C] font-body">Your {collateralAsset.symbol} collateral</span>
+                <div className="text-right">
+                  <span className="font-data text-sm font-semibold text-[#EAECEF]">
+                    {collateralPosition.depositedAmount.toLocaleString(undefined, { maximumFractionDigits: 4 })} {collateralAsset.symbol}
+                  </span>
+                  <span className="text-[10px] text-[#848E9C] font-body block">
+                    ≈ ${collateralPosition.collateralValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                  </span>
+                </div>
+              </div>
+
               <div className="space-y-4">
                 <div>
-                  <label className="text-xs text-[#848E9C] font-body mb-2 block">Amount to Borrow</label>
-                  <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)}
-                    placeholder={`0.00 ${borrowAsset.symbol}`} className="input-field" min="0" step="0.01" />
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs text-[#848E9C] font-body">Amount to Borrow</label>
+                    <span className="text-xs text-[#848E9C] font-body">
+                      Max: <button
+                        onClick={() => setAmount(maxBorrow.toFixed(6))}
+                        className="text-[#F7A600] hover:underline font-data"
+                      >
+                        {maxBorrow.toFixed(4)} {borrowAsset.symbol}
+                      </button>
+                    </span>
+                  </div>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                      placeholder={`0.00 ${borrowAsset.symbol}`}
+                      className="input-field pr-20"
+                      min="0"
+                      max={maxBorrow}
+                      step="0.001"
+                    />
+                    <button
+                      onClick={() => setAmount(maxBorrow.toFixed(6))}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-[#F7A600] font-body px-2 py-1 rounded bg-[#F7A600]/10 hover:bg-[#F7A600]/20 transition-colors"
+                    >
+                      MAX
+                    </button>
+                  </div>
                   <p className="text-xs text-[#848E9C] font-body mt-1">
                     ≈ ${(parseFloat(amount || '0') * borrowAsset.priceUSD).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    &nbsp;· Borrow APY: <span className="text-[#F6465D] font-semibold">{borrowAsset.borrowAPY}%</span>
                   </p>
                 </div>
 
+                {/* Preview */}
                 {borrowPreview && (
                   <div className="p-4 rounded-lg bg-[#0B0E11]/60 border border-[#1E232C] space-y-2">
                     <div className="flex justify-between">
-                      <span className="text-xs text-[#848E9C] font-body">LTV</span>
+                      <span className="text-xs text-[#848E9C] font-body">LTV Ratio</span>
                       <span className="font-data text-xs font-semibold"
                         style={{ color: borrowPreview.ltv <= 50 ? '#0ECB81' : borrowPreview.ltv <= 70 ? '#F7A600' : '#F6465D' }}>
                         {borrowPreview.ltv.toFixed(1)}% / {borrowPreview.maxLTV}% max
                       </span>
                     </div>
-                    <div className="flex justify-between">
+                    <div className="w-full h-1.5 rounded-full bg-[#1E232C] overflow-hidden">
+                      <div className="h-full rounded-full transition-all duration-500"
+                        style={{
+                          width: `${Math.min(borrowPreview.ltv / borrowPreview.maxLTV * 100, 100)}%`,
+                          background: borrowPreview.ltv <= 50 ? '#0ECB81' : borrowPreview.ltv <= 70 ? '#F7A600' : '#F6465D',
+                        }} />
+                    </div>
+                    <div className="flex justify-between pt-1">
                       <span className="text-xs text-[#848E9C] font-body">Health Factor</span>
                       <span className="font-data text-xs font-semibold"
                         style={{ color: borrowPreview.healthFactor >= 1.5 ? '#0ECB81' : borrowPreview.healthFactor >= 1.1 ? '#F7A600' : '#F6465D' }}>
-                        {showData ? borrowPreview.healthFactor.toFixed(2) : '•••'}
+                        {borrowPreview.healthFactor.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-xs text-[#848E9C] font-body">Collateral Value</span>
+                      <span className="font-data text-xs text-[#EAECEF]">
+                        ${borrowPreview.collateralValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                       </span>
                     </div>
                   </div>
                 )}
 
+                {/* Health gauge */}
                 {borrowPreview && (
                   <div className="flex justify-center py-2">
-                    <HealthFactorGauge value={borrowPreview.healthFactor} showValue={showData} size={120} />
+                    <HealthFactorGauge value={borrowPreview.healthFactor} showValue size={120} />
                   </div>
                 )}
 
+                {/* MPC animation */}
                 {mpcStatus === 'computing' && (
                   <div className="p-4 rounded-lg bg-[#7C3AED]/5 border border-[#7C3AED]/30">
                     <div className="flex items-center gap-3 mb-3">
@@ -162,23 +264,50 @@ export default function BorrowPage() {
                   </div>
                 )}
 
-                <button onClick={handleBorrow}
-                  disabled={!connected || !amount || loading || parseFloat(amount) <= 0 || (!!borrowPreview && !borrowPreview.isSafe)}
+                <button
+                  onClick={handleBorrow}
+                  disabled={
+                    !connected || !amount || loading ||
+                    parseFloat(amount) <= 0 ||
+                    parseFloat(amount) > maxBorrow ||
+                    (!!borrowPreview && !borrowPreview.isSafe)
+                  }
                   className="w-full py-3 rounded-lg font-semibold font-data text-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  style={{ background: isPrivateMode ? 'linear-gradient(135deg, #7C3AED 0%, #5B21B6 100%)' : 'linear-gradient(135deg, #F97316 0%, #EA580C 100%)', color: '#fff' }}>
+                  style={{
+                    background: isPrivateMode
+                      ? 'linear-gradient(135deg, #7C3AED 0%, #5B21B6 100%)'
+                      : 'linear-gradient(135deg, #F97316 0%, #EA580C 100%)',
+                    color: '#fff',
+                  }}
+                >
                   {loading
                     ? <Loader2 className="w-4 h-4 animate-spin" />
-                    : <><TrendingDown className="w-4 h-4" />{isPrivateMode ? 'Initialize Confidential Circuit' : 'Confirm Borrow'}</>}
+                    : <><TrendingDown className="w-4 h-4" />
+                       {isPrivateMode ? 'Initialize Confidential Circuit' : 'Confirm Borrow'}</>}
                 </button>
+
                 {borrowPreview && !borrowPreview.isSafe && (
-                  <p className="text-xs text-[#F6465D] text-center font-body">Health factor too low. Reduce borrow amount or increase collateral.</p>
+                  <p className="text-xs text-[#F6465D] text-center font-body">
+                    ⚠ LTV too high. Reduce amount or choose more collateral.
+                  </p>
                 )}
-                {!connected && <p className="text-xs text-[#F7A600] text-center font-body">Connect your wallet to borrow</p>}
+                {!connected && (
+                  <p className="text-xs text-[#F7A600] text-center font-body">Connect your wallet to borrow</p>
+                )}
               </div>
+            </div>
+          )}
+
+          {/* Prompt if collateral selected but no borrow asset yet */}
+          {collateralPool && !borrowPool && (
+            <div className="glass-panel rounded-xl p-5 flex items-center gap-3 text-[#848E9C]">
+              <Info className="w-4 h-4 flex-shrink-0" />
+              <p className="text-sm font-body">Now select which asset you want to borrow above ↑</p>
             </div>
           )}
         </div>
 
+        {/* Sidebar */}
         <div className="space-y-6">
           <div className="glass-panel rounded-xl p-5">
             <h2 className="font-data font-semibold text-[#EAECEF] mb-4">Privacy Controls</h2>
@@ -186,27 +315,59 @@ export default function BorrowPage() {
               showData={showData} onShowDataToggle={setShowData} />
           </div>
 
+          {/* Live collateral stats */}
+          {collateralPosition && collateralAsset && (
+            <div className="glass-panel rounded-xl p-5">
+              <h2 className="font-data font-semibold text-[#EAECEF] mb-3">Collateral Stats</h2>
+              <div className="space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-xs text-[#848E9C] font-body">Deposited</span>
+                  <span className="font-data text-xs text-[#EAECEF]">
+                    {collateralPosition.depositedAmount.toLocaleString(undefined, { maximumFractionDigits: 4 })} {collateralAsset.symbol}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-xs text-[#848E9C] font-body">Value (USD)</span>
+                  <span className="font-data text-xs text-[#EAECEF]">
+                    ${collateralPosition.collateralValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                  </span>
+                </div>
+                {borrowAsset && (
+                  <div className="flex justify-between">
+                    <span className="text-xs text-[#848E9C] font-body">Max Borrow ({borrowAsset.symbol})</span>
+                    <span className="font-data text-xs text-[#F7A600] font-semibold">
+                      {maxBorrow.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span className="text-xs text-[#848E9C] font-body">LTV Limit</span>
+                  <span className="font-data text-xs text-[#EAECEF]">{borrowAsset?.ltv ?? collateralAsset.ltv}%</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="glass-panel rounded-xl p-5">
-            <h2 className="font-data font-semibold text-[#EAECEF] mb-4">Borrow Info</h2>
+            <h2 className="font-data font-semibold text-[#EAECEF] mb-3">How Borrowing Works</h2>
             <div className="space-y-3">
               <div className="p-3 rounded-lg bg-[#0B0E11]/60 border border-[#1E232C]">
-                <div className="flex items-center gap-2 mb-2">
-                  <AlertTriangle className="w-4 h-4 text-[#F7A600]" />
+                <div className="flex items-center gap-2 mb-1">
+                  <AlertTriangle className="w-3.5 h-3.5 text-[#F7A600]" />
                   <span className="text-xs font-medium text-[#EAECEF] font-body">Liquidation Risk</span>
                 </div>
                 <p className="text-xs text-[#848E9C] font-body leading-relaxed">
-                  If your health factor drops below 1.0, your position may be liquidated. With Arcium privacy mode,
-                  liquidation checks are performed via encrypted MPC.
+                  If your health factor drops below 1.0 your position may be liquidated.
+                  Keep LTV well below the maximum.
                 </p>
               </div>
               <div className="p-3 rounded-lg bg-[#0B0E11]/60 border border-[#1E232C]">
-                <div className="flex items-center gap-2 mb-2">
-                  <Shield className="w-4 h-4 text-[#7C3AED]" />
-                  <span className="text-xs font-medium text-[#EAECEF] font-body">Privacy Protection</span>
+                <div className="flex items-center gap-2 mb-1">
+                  <Shield className="w-3.5 h-3.5 text-[#7C3AED]" />
+                  <span className="text-xs font-medium text-[#EAECEF] font-body">Arcium Privacy</span>
                 </div>
                 <p className="text-xs text-[#848E9C] font-body leading-relaxed">
-                  In privacy mode, your borrow amount, collateral, and health factor are encrypted via Arcium's MPC
-                  network. No sensitive data is exposed on-chain.
+                  In private mode, your health factor is computed via MPC — never exposed on-chain.
                 </p>
               </div>
             </div>
@@ -214,6 +375,7 @@ export default function BorrowPage() {
         </div>
       </div>
 
+      {/* Success modal */}
       {showSuccess && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0B0E11]/85 backdrop-blur-sm"
           onClick={() => setShowSuccess(false)}>
@@ -224,7 +386,9 @@ export default function BorrowPage() {
             </div>
             <h3 className="font-data text-lg font-bold text-[#EAECEF] mb-2">Borrow Successful</h3>
             <p className="text-sm text-[#848E9C] font-body text-center">
-              {isPrivateMode ? 'Your confidential borrow has been executed. Position data is encrypted.' : 'Your borrow has been confirmed.'}
+              {isPrivateMode
+                ? 'Your confidential borrow has been executed. Position data is encrypted.'
+                : 'Your borrow has been confirmed and added to your positions.'}
             </p>
             {txHash && (
               <a href={`https://explorer.solana.com/tx/${txHash}?cluster=devnet`}
@@ -233,7 +397,9 @@ export default function BorrowPage() {
                 View on Explorer <ArrowRight className="w-3 h-3" />
               </a>
             )}
-            <button onClick={() => setShowSuccess(false)} className="mt-6 btn-primary px-6 py-2 text-sm">Done</button>
+            <button onClick={() => setShowSuccess(false)} className="mt-6 btn-primary px-6 py-2 text-sm">
+              Done
+            </button>
           </div>
         </div>
       )}

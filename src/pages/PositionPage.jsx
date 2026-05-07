@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Shield, TrendingUp, TrendingDown, Lock, AlertTriangle, Loader2, X } from 'lucide-react'
+import { Shield, TrendingUp, TrendingDown, Lock, AlertTriangle, Loader2, X, Activity } from 'lucide-react'
 import { useLendingProtocol } from '@/hooks/useLendingProtocol'
 import { PrivacyToggle } from '@/components/protocol/PrivacyToggle'
 import { HealthFactorGauge } from '@/components/charts/HealthFactorGauge'
@@ -24,13 +24,17 @@ function Modal({ open, onClose, title, children }) {
 }
 
 export default function PositionPage() {
-  const { pools, userPositions, loading, isPrivateMode, setIsPrivateMode, repay, withdraw } = useLendingProtocol()
-  const [showData, setShowData] = useState(false)
-  const [repayAmount, setRepayAmount] = useState('')
-  const [selectedPosition, setSelectedPosition] = useState(null)
-  const [showRepayDialog, setShowRepayDialog] = useState(false)
+  const {
+    pools, depositPositions, borrowPositions,
+    loading, isPrivateMode, setIsPrivateMode, repay, withdraw,
+  } = useLendingProtocol()
+
+  const [showData,           setShowData]           = useState(true)
+  const [repayAmount,        setRepayAmount]        = useState('')
+  const [selectedPosition,   setSelectedPosition]   = useState(null)
+  const [showRepayDialog,    setShowRepayDialog]    = useState(false)
   const [showWithdrawDialog, setShowWithdrawDialog] = useState(false)
-  const [withdrawAmount, setWithdrawAmount] = useState('')
+  const [withdrawAmount,     setWithdrawAmount]     = useState('')
 
   const handleRepay = async () => {
     if (!selectedPosition || !repayAmount) return
@@ -42,7 +46,7 @@ export default function PositionPage() {
 
   const handleWithdraw = async () => {
     if (!selectedPosition || !withdrawAmount) return
-    const position = userPositions.find((p) => p.id === selectedPosition)
+    const position = depositPositions.find((p) => p.id === selectedPosition)
     if (!position) return
     try {
       await withdraw(position.poolId, parseFloat(withdrawAmount))
@@ -50,19 +54,20 @@ export default function PositionPage() {
     } catch (err) { console.error('Withdraw failed:', err) }
   }
 
-  const openRepayDialog = (id) => { setSelectedPosition(id); setRepayAmount(''); setShowRepayDialog(true) }
+  const openRepayDialog    = (id) => { setSelectedPosition(id); setRepayAmount('');    setShowRepayDialog(true)    }
   const openWithdrawDialog = (id) => { setSelectedPosition(id); setWithdrawAmount(''); setShowWithdrawDialog(true) }
 
-  const totalDeposited = userPositions.reduce((s, p) => s + p.collateralValue, 0)
-  const totalBorrowed = userPositions.reduce((s, p) => s + p.borrowValue, 0)
-  const overallHF = totalBorrowed > 0 ? (totalDeposited * 0.8) / totalBorrowed : 999
-  const netAPY = totalDeposited > 0
-    ? userPositions.reduce((s, p) => {
+  const totalDeposited = depositPositions.reduce((s, p) => s + p.collateralValue, 0)
+  const totalBorrowed  = borrowPositions.reduce( (s, p) => s + p.borrowValue,     0)
+  const overallHF      = totalBorrowed > 0 ? (totalDeposited * 0.8) / totalBorrowed : 999
+  const netAPY         = totalDeposited > 0
+    ? depositPositions.reduce((s, p) => {
         const pool = pools.find((pl) => pl.id === p.poolId)
-        if (!pool) return s
-        return s + (p.depositedAmount * pool.depositAPY - p.borrowedAmount * pool.borrowAPY)
+        return s + (p.depositedAmount * (pool?.depositAPY || 0))
       }, 0) / totalDeposited
     : 0
+
+  const hasAnyPosition = depositPositions.length > 0 || borrowPositions.length > 0
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -81,7 +86,9 @@ export default function PositionPage() {
             <div>
               <p className="text-[10px] text-[#848E9C] font-body uppercase tracking-wider">Total Supplied</p>
               <p className="font-data text-lg font-bold text-[#EAECEF]">
-                {showData ? `$${totalDeposited.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '••••••'}
+                {showData
+                  ? `$${totalDeposited.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+                  : '••••••'}
               </p>
             </div>
           </div>
@@ -94,7 +101,9 @@ export default function PositionPage() {
             <div>
               <p className="text-[10px] text-[#848E9C] font-body uppercase tracking-wider">Total Borrowed</p>
               <p className="font-data text-lg font-bold text-[#EAECEF]">
-                {showData ? `$${totalBorrowed.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '••••••'}
+                {showData
+                  ? `$${totalBorrowed.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+                  : '••••••'}
               </p>
             </div>
           </div>
@@ -106,20 +115,28 @@ export default function PositionPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
-          {/* Lending Positions */}
-          <div className="glass-panel rounded-xl p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <TrendingUp className="w-4 h-4 text-[#0ECB81]" />
-              <h2 className="font-data font-semibold text-[#EAECEF]">Lending Positions</h2>
+
+          {/* Empty state */}
+          {!hasAnyPosition && (
+            <div className="glass-panel rounded-xl p-10 text-center">
+              <Activity className="w-12 h-12 text-[#1E232C] mx-auto mb-4" />
+              <p className="font-data text-lg font-semibold text-[#EAECEF] mb-2">No positions yet</p>
+              <p className="text-sm text-[#848E9C] font-body">
+                Head to <strong>Lend</strong> to deposit assets, then come back here to see and manage your positions.
+              </p>
             </div>
-            {userPositions.filter((p) => p.depositedAmount > 0).length === 0 ? (
-              <div className="text-center py-8">
-                <p className="text-sm text-[#848E9C] font-body">No lending positions</p>
-                <p className="text-xs text-[#848E9C] font-body mt-1">Deposit assets to start earning yield</p>
+          )}
+
+          {/* Lending Positions */}
+          {depositPositions.length > 0 && (
+            <div className="glass-panel rounded-xl p-5">
+              <div className="flex items-center gap-2 mb-4">
+                <TrendingUp className="w-4 h-4 text-[#0ECB81]" />
+                <h2 className="font-data font-semibold text-[#EAECEF]">Lending Positions</h2>
+                <span className="ml-auto text-xs text-[#848E9C] font-body">{depositPositions.length} position{depositPositions.length !== 1 ? 's' : ''}</span>
               </div>
-            ) : (
               <div className="space-y-3">
-                {userPositions.filter((p) => p.depositedAmount > 0).map((pos) => {
+                {depositPositions.map((pos) => {
                   const pool = pools.find((p) => p.id === pos.poolId)
                   return (
                     <div key={pos.id} className="p-4 rounded-lg bg-[#0B0E11]/60 border border-[#1E232C] hover:border-[#0ECB81]/30 transition-colors">
@@ -144,45 +161,49 @@ export default function PositionPage() {
                         <div>
                           <p className="text-[10px] text-[#848E9C] font-body">Deposited</p>
                           <p className="font-data text-sm font-medium text-[#EAECEF]">
-                            {showData ? `${pos.depositedAmount.toFixed(4)} ${pos.assetSymbol}` : '••••••'}
+                            {showData
+                              ? `${pos.depositedAmount.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${pos.assetSymbol}`
+                              : '••••••'}
                           </p>
-                          <p className="text-[10px] text-[#848E9C] font-body">{showData ? `$${pos.collateralValue.toFixed(2)}` : '••••'}</p>
+                          <p className="text-[10px] text-[#848E9C] font-body">
+                            {showData ? `$${pos.collateralValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '••••'}
+                          </p>
                         </div>
                         <div className="text-right">
-                          <p className="text-[10px] text-[#848E9C] font-body">Earned</p>
+                          <p className="text-[10px] text-[#848E9C] font-body">Accrued Yield</p>
                           <p className="font-data text-sm font-medium text-[#0ECB81]">
-                            {showData ? `+${(pos.depositedAmount * (pool?.depositAPY || 0) / 100).toFixed(6)}` : '•••'}
+                            {showData
+                              ? `+${(pos.depositedAmount * (pool?.depositAPY || 0) / 100 / 365).toFixed(6)} ${pos.assetSymbol}/day`
+                              : '•••'}
                           </p>
                         </div>
                       </div>
-                      <button onClick={() => openWithdrawDialog(pos.id)}
-                        className="w-full py-2 rounded-lg border border-[#1E232C] text-xs text-[#EAECEF] font-body hover:bg-[#F6465D]/10 hover:border-[#F6465D]/30 hover:text-[#F6465D] transition-colors">
+                      <button
+                        onClick={() => openWithdrawDialog(pos.id)}
+                        className="w-full py-2 rounded-lg border border-[#1E232C] text-xs text-[#EAECEF] font-body hover:bg-[#F6465D]/10 hover:border-[#F6465D]/30 hover:text-[#F6465D] transition-colors"
+                      >
                         Withdraw
                       </button>
                     </div>
                   )
                 })}
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
           {/* Borrowing Positions */}
-          <div className="glass-panel rounded-xl p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <TrendingDown className="w-4 h-4 text-[#F6465D]" />
-              <h2 className="font-data font-semibold text-[#EAECEF]">Borrowing Positions</h2>
-            </div>
-            {userPositions.filter((p) => p.borrowedAmount > 0).length === 0 ? (
-              <div className="text-center py-8">
-                <p className="text-sm text-[#848E9C] font-body">No borrowing positions</p>
-                <p className="text-xs text-[#848E9C] font-body mt-1">Borrow against your collateral</p>
+          {borrowPositions.length > 0 && (
+            <div className="glass-panel rounded-xl p-5">
+              <div className="flex items-center gap-2 mb-4">
+                <TrendingDown className="w-4 h-4 text-[#F6465D]" />
+                <h2 className="font-data font-semibold text-[#EAECEF]">Borrowing Positions</h2>
+                <span className="ml-auto text-xs text-[#848E9C] font-body">{borrowPositions.length} position{borrowPositions.length !== 1 ? 's' : ''}</span>
               </div>
-            ) : (
               <div className="space-y-3">
-                {userPositions.filter((p) => p.borrowedAmount > 0).map((pos) => {
-                  const pool = pools.find((p) => p.id === pos.poolId)
+                {borrowPositions.map((pos) => {
+                  const pool    = pools.find((p) => p.id === pos.poolId)
                   const hfStatus = pos.healthFactor >= 1.5 ? 'SAFE' : pos.healthFactor >= 1.1 ? 'WARNING' : 'DANGER'
-                  const hfColor = hfStatus === 'SAFE' ? '#0ECB81' : hfStatus === 'WARNING' ? '#F7A600' : '#F6465D'
+                  const hfColor  = hfStatus === 'SAFE' ? '#0ECB81' : hfStatus === 'WARNING' ? '#F7A600' : '#F6465D'
                   return (
                     <div key={pos.id} className="p-4 rounded-lg bg-[#0B0E11]/60 border border-[#1E232C] hover:border-[#F6465D]/30 transition-colors">
                       <div className="flex items-center justify-between mb-3">
@@ -195,22 +216,37 @@ export default function PositionPage() {
                             <p className="text-[10px] text-[#F6465D] font-body">{pool?.borrowAPY}% APY</p>
                           </div>
                         </div>
-                        <span className="text-[10px] font-semibold font-data px-2 py-0.5 rounded-full"
-                          style={{ color: hfColor, backgroundColor: `${hfColor}15` }}>{hfStatus}</span>
+                        <div className="flex items-center gap-2">
+                          {pos.isPrivate && (
+                            <div className="flex items-center gap-1 px-2 py-1 rounded bg-[#7C3AED]/10 border border-[#7C3AED]/20">
+                              <Lock className="w-3 h-3 text-[#7C3AED]" />
+                              <span className="text-[10px] text-[#7C3AED] font-body">Private</span>
+                            </div>
+                          )}
+                          <span className="text-[10px] font-semibold font-data px-2 py-0.5 rounded-full"
+                            style={{ color: hfColor, backgroundColor: `${hfColor}15` }}>{hfStatus}</span>
+                        </div>
                       </div>
-                      <div className="grid grid-cols-3 gap-4 mb-3">
+                      <div className="grid grid-cols-3 gap-3 mb-3">
                         <div>
                           <p className="text-[10px] text-[#848E9C] font-body">Borrowed</p>
                           <p className="font-data text-sm font-medium text-[#EAECEF]">
-                            {showData ? `${pos.borrowedAmount.toFixed(4)} ${pos.assetSymbol}` : '••••'}
+                            {showData
+                              ? `${pos.borrowedAmount.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${pos.assetSymbol}`
+                              : '••••'}
+                          </p>
+                          <p className="text-[10px] text-[#848E9C] font-body">
+                            {showData ? `$${pos.borrowValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '••••'}
                           </p>
                         </div>
                         <div>
                           <p className="text-[10px] text-[#848E9C] font-body">LTV</p>
-                          <p className="font-data text-sm font-medium text-[#EAECEF]">{showData ? `${pos.ltv.toFixed(1)}%` : '•••'}</p>
+                          <p className="font-data text-sm font-medium text-[#EAECEF]">
+                            {showData ? `${pos.ltv.toFixed(1)}%` : '•••'}
+                          </p>
                         </div>
                         <div>
-                          <p className="text-[10px] text-[#848E9C] font-body">Health</p>
+                          <p className="text-[10px] text-[#848E9C] font-body">Health Factor</p>
                           <p className="font-data text-sm font-medium" style={{ color: hfColor }}>
                             {showData ? pos.healthFactor.toFixed(2) : '•••'}
                           </p>
@@ -231,7 +267,7 @@ export default function PositionPage() {
                           <div className="flex items-start gap-2">
                             <AlertTriangle className="w-4 h-4 text-[#F6465D] mt-0.5 flex-shrink-0" />
                             <p className="text-xs text-[#F6465D] font-body">
-                              Your position is at risk of liquidation. Repay some debt or add collateral immediately.
+                              At risk of liquidation. Repay debt or add collateral immediately.
                             </p>
                           </div>
                         </div>
@@ -244,8 +280,8 @@ export default function PositionPage() {
                   )
                 })}
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         {/* Sidebar */}
@@ -257,22 +293,26 @@ export default function PositionPage() {
           </div>
 
           <div className="glass-panel rounded-xl p-5">
-            <h2 className="font-data font-semibold text-[#EAECEF] mb-4">Position Summary</h2>
+            <h2 className="font-data font-semibold text-[#EAECEF] mb-4">Portfolio Summary</h2>
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex justify-between">
                 <span className="text-xs text-[#848E9C] font-body">Net APY</span>
                 <span className={`font-data text-sm font-semibold ${netAPY >= 0 ? 'text-[#0ECB81]' : 'text-[#F6465D]'}`}>
                   {netAPY >= 0 ? '+' : ''}{netAPY.toFixed(2)}%
                 </span>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-[#848E9C] font-body">Total Positions</span>
-                <span className="font-data text-sm text-[#EAECEF]">{userPositions.length}</span>
+              <div className="flex justify-between">
+                <span className="text-xs text-[#848E9C] font-body">Lending Positions</span>
+                <span className="font-data text-sm text-[#EAECEF]">{depositPositions.length}</span>
               </div>
-              <div className="flex items-center justify-between">
+              <div className="flex justify-between">
+                <span className="text-xs text-[#848E9C] font-body">Borrow Positions</span>
+                <span className="font-data text-sm text-[#EAECEF]">{borrowPositions.length}</span>
+              </div>
+              <div className="flex justify-between">
                 <span className="text-xs text-[#848E9C] font-body">Private Positions</span>
                 <span className="font-data text-sm text-[#7C3AED]">
-                  {userPositions.filter((p) => p.isPrivate).length}
+                  {[...depositPositions, ...borrowPositions].filter((p) => p.isPrivate).length}
                 </span>
               </div>
             </div>
@@ -284,8 +324,8 @@ export default function PositionPage() {
               <div>
                 <h3 className="text-sm font-medium text-[#EAECEF] font-body mb-2">Encrypted Position Data</h3>
                 <p className="text-xs text-[#848E9C] font-body leading-relaxed">
-                  Your position's health factor, LTV, and liquidation threshold are computed through Arcium's MPC
-                  network — never exposed on-chain in plaintext, protecting you from liquidation bots and MEV attacks.
+                  Health factor, LTV, and liquidation thresholds are computed through Arcium's MPC network —
+                  never exposed on-chain, protecting you from MEV bots.
                 </p>
               </div>
             </div>
@@ -303,13 +343,16 @@ export default function PositionPage() {
                 placeholder="0.00" className="input-field pr-16" min="0" step="0.01" />
               {selectedPosition && (
                 <button onClick={() => {
-                  const pos = userPositions.find((p) => p.id === selectedPosition)
+                  const pos = borrowPositions.find((p) => p.id === selectedPosition)
                   if (pos) setRepayAmount(pos.borrowedAmount.toString())
-                }} className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-[#F7A600] font-body px-2 py-1 rounded bg-[#F7A600]/10 hover:bg-[#F7A600]/20 transition-colors">MAX</button>
+                }} className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-[#F7A600] font-body px-2 py-1 rounded bg-[#F7A600]/10 hover:bg-[#F7A600]/20 transition-colors">
+                  MAX
+                </button>
               )}
             </div>
           </div>
-          <button onClick={handleRepay} disabled={loading || !repayAmount || parseFloat(repayAmount) <= 0}
+          <button onClick={handleRepay}
+            disabled={loading || !repayAmount || parseFloat(repayAmount) <= 0}
             className="btn-primary w-full py-2.5 flex items-center justify-center gap-2 disabled:opacity-50">
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Confirm Repay'}
           </button>
@@ -326,13 +369,16 @@ export default function PositionPage() {
                 placeholder="0.00" className="input-field pr-16" min="0" step="0.01" />
               {selectedPosition && (
                 <button onClick={() => {
-                  const pos = userPositions.find((p) => p.id === selectedPosition)
+                  const pos = depositPositions.find((p) => p.id === selectedPosition)
                   if (pos) setWithdrawAmount(pos.depositedAmount.toString())
-                }} className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-[#F7A600] font-body px-2 py-1 rounded bg-[#F7A600]/10 hover:bg-[#F7A600]/20 transition-colors">MAX</button>
+                }} className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-[#F7A600] font-body px-2 py-1 rounded bg-[#F7A600]/10 hover:bg-[#F7A600]/20 transition-colors">
+                  MAX
+                </button>
               )}
             </div>
           </div>
-          <button onClick={handleWithdraw} disabled={loading || !withdrawAmount || parseFloat(withdrawAmount) <= 0}
+          <button onClick={handleWithdraw}
+            disabled={loading || !withdrawAmount || parseFloat(withdrawAmount) <= 0}
             className="w-full py-2.5 rounded-lg border border-[#F6465D]/30 text-[#F6465D] font-semibold font-body hover:bg-[#F6465D]/10 transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Confirm Withdraw'}
           </button>
