@@ -21,7 +21,6 @@ export default defineConfig({
       '@solana/wallet-adapter-react-ui',
       '@solana/wallet-adapter-phantom',
       '@solana/wallet-adapter-solflare',
-      '@solana/wallet-adapter-backpack',
     ],
     esbuildOptions: {
       target: 'esnext',
@@ -41,7 +40,6 @@ export default defineConfig({
           wallets: [
             '@solana/wallet-adapter-phantom',
             '@solana/wallet-adapter-solflare',
-            '@solana/wallet-adapter-backpack',
           ],
         },
       },
